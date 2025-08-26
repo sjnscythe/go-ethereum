@@ -20,8 +20,8 @@ jobs:
     - uses: actions/cache@v4
       with:
         path: build/cache
-        key: ${{ runner.os }}-build-tools-cache-${{ hashFiles('build/checksums.txt') }}
-
+        key: ${{ runner.os }}-build-tools-cache-static
+        
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
