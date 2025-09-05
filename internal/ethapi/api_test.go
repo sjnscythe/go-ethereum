@@ -34,11 +34,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/internal/ethapi/override"
-
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -56,6 +54,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethdb"
 	"github.com/ethereum/go-ethereum/event"
 	"github.com/ethereum/go-ethereum/internal/blocktest"
+	"github.com/ethereum/go-ethereum/internal/ethapi/override"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/holiman/uint256"
@@ -2671,19 +2670,53 @@ func TestSendBlobTransaction(t *testing.T) {
 
 func TestFillBlobTransaction(t *testing.T) {
 	t.Parallel()
+
+	testFillBlobTransaction(t, false)
+	testFillBlobTransaction(t, true)
+}
+
+func testFillBlobTransaction(t *testing.T, osaka bool) {
 	// Initialize test accounts
+	config := *params.MergedTestChainConfig
+	if !osaka {
+		config.OsakaTime = nil
+	}
 	var (
 		key, _  = crypto.HexToECDSA("8a1f9a8f95be41cd7ccb6168179afb4504aefe388d1e14474d32c45c72ce7b7a")
 		to      = crypto.PubkeyToAddress(key.PublicKey)
 		genesis = &core.Genesis{
-			Config: params.MergedTestChainConfig,
+			Config: &config,
 			Alloc:  types.GenesisAlloc{},
 		}
-		emptyBlob                      = new(kzg4844.Blob)
-		emptyBlobs                     = []kzg4844.Blob{*emptyBlob}
-		emptyBlobCommit, _             = kzg4844.BlobToCommitment(emptyBlob)
-		emptyBlobProof, _              = kzg4844.ComputeBlobProof(emptyBlob, emptyBlobCommit)
-		emptyBlobHash      common.Hash = kzg4844.CalcBlobHashV1(sha256.New(), &emptyBlobCommit)
+		emptyBlob                          = new(kzg4844.Blob)
+		emptyBlobs                         = []kzg4844.Blob{*emptyBlob}
+		emptyBlobCommit, _                 = kzg4844.BlobToCommitment(emptyBlob)
+		emptyBlobProof, _                  = kzg4844.ComputeBlobProof(emptyBlob, emptyBlobCommit)
+		emptyBlobCellProofs, _             = kzg4844.ComputeCellProofs(emptyBlob)
+		emptyBlobHash          common.Hash = kzg4844.CalcBlobHashV1(sha256.New(), &emptyBlobCommit)
+
+		fillEmptyKZGProofs = func(blobs int) []kzg4844.Proof {
+			if osaka {
+				return make([]kzg4844.Proof, blobs*kzg4844.CellProofsPerBlob)
+			}
+			return make([]kzg4844.Proof, blobs)
+		}
+		expectSidecar = func() *types.BlobTxSidecar {
+			if osaka {
+				return types.NewBlobTxSidecar(
+					types.BlobSidecarVersion1,
+					emptyBlobs,
+					[]kzg4844.Commitment{emptyBlobCommit},
+					emptyBlobCellProofs,
+				)
+			}
+			return types.NewBlobTxSidecar(
+				types.BlobSidecarVersion0,
+				emptyBlobs,
+				[]kzg4844.Commitment{emptyBlobCommit},
+				[]kzg4844.Proof{emptyBlobProof},
+			)
+		}
 	)
 	b := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
 		b.SetPoS()
@@ -2743,7 +2776,7 @@ func TestFillBlobTransaction(t *testing.T) {
 				Commitments: []kzg4844.Commitment{{}, {}},
 				Proofs:      []kzg4844.Proof{{}},
 			},
-			err: `number of blobs and proofs mismatch (have=1, want=2)`,
+			err: fmt.Sprintf(`number of blobs and proofs mismatch (have=1, want=%d)`, len(fillEmptyKZGProofs(2))),
 		},
 		{
 			name: "TestInvalidProofVerification",
@@ -2753,7 +2786,7 @@ func TestFillBlobTransaction(t *testing.T) {
 				Value:       (*hexutil.Big)(big.NewInt(1)),
 				Blobs:       []kzg4844.Blob{{}, {}},
 				Commitments: []kzg4844.Commitment{{}, {}},
-				Proofs:      []kzg4844.Proof{{}, {}},
+				Proofs:      fillEmptyKZGProofs(2),
 			},
 			err: `failed to verify blob proof: short buffer`,
 		},
@@ -2769,7 +2802,7 @@ func TestFillBlobTransaction(t *testing.T) {
 			},
 			want: &result{
 				Hashes:  []common.Hash{emptyBlobHash},
-				Sidecar: types.NewBlobTxSidecar(types.BlobSidecarVersion0, emptyBlobs, []kzg4844.Commitment{emptyBlobCommit}, []kzg4844.Proof{emptyBlobProof}),
+				Sidecar: expectSidecar(),
 			},
 		},
 		{
@@ -2785,7 +2818,7 @@ func TestFillBlobTransaction(t *testing.T) {
 			},
 			want: &result{
 				Hashes:  []common.Hash{emptyBlobHash},
-				Sidecar: types.NewBlobTxSidecar(types.BlobSidecarVersion0, emptyBlobs, []kzg4844.Commitment{emptyBlobCommit}, []kzg4844.Proof{emptyBlobProof}),
+				Sidecar: expectSidecar(),
 			},
 		},
 		{
@@ -2811,7 +2844,7 @@ func TestFillBlobTransaction(t *testing.T) {
 			},
 			want: &result{
 				Hashes:  []common.Hash{emptyBlobHash},
-				Sidecar: types.NewBlobTxSidecar(types.BlobSidecarVersion0, emptyBlobs, []kzg4844.Commitment{emptyBlobCommit}, []kzg4844.Proof{emptyBlobProof}),
+				Sidecar: expectSidecar(),
 			},
 		},
 	}
@@ -3724,4 +3757,131 @@ func TestCreateAccessListWithStateOverrides(t *testing.T) {
 		StorageKeys: []common.Hash{{}},
 	}}
 	require.Equal(t, expected, result.Accesslist)
+}
+
+func TestEstimateGasWithMovePrecompile(t *testing.T) {
+	t.Parallel()
+	// Initialize test accounts
+	var (
+		accounts = newAccounts(2)
+		genesis  = &core.Genesis{
+			Config: params.MergedTestChainConfig,
+			Alloc: types.GenesisAlloc{
+				accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+			},
+		}
+	)
+	backend := newTestBackend(t, 1, genesis, beacon.New(ethash.NewFaker()), func(i int, b *core.BlockGen) {
+		b.SetPoS()
+	})
+	api := NewBlockChainAPI(backend)
+	// Move SHA256 precompile (0x2) to a new address (0x100)
+	// and estimate gas for calling the moved precompile.
+	var (
+		sha256Addr    = common.BytesToAddress([]byte{0x2})
+		newSha256Addr = common.BytesToAddress([]byte{0x10, 0})
+		sha256Input   = hexutil.Bytes([]byte("hello"))
+		args          = TransactionArgs{
+			From: &accounts[0].addr,
+			To:   &newSha256Addr,
+			Data: &sha256Input,
+		}
+		overrides = &override.StateOverride{
+			sha256Addr: override.OverrideAccount{
+				MovePrecompileTo: &newSha256Addr,
+			},
+		}
+	)
+	gas, err := api.EstimateGas(context.Background(), args, nil, overrides, nil)
+	if err != nil {
+		t.Fatalf("EstimateGas failed: %v", err)
+	}
+	if gas != 21366 {
+		t.Fatalf("mismatched gas: %d, want 21366", gas)
+	}
+}
+
+func TestEIP7910Config(t *testing.T) {
+	var (
+		newUint64 = func(val uint64) *uint64 { return &val }
+		// Define a snapshot of the current Hoodi config (only Prague scheduled) so that future forks do not
+		// cause this test to fail.
+		config = &params.ChainConfig{
+			ChainID:                 big.NewInt(560048),
+			HomesteadBlock:          big.NewInt(0),
+			DAOForkBlock:            nil,
+			DAOForkSupport:          true,
+			EIP150Block:             big.NewInt(0),
+			EIP155Block:             big.NewInt(0),
+			EIP158Block:             big.NewInt(0),
+			ByzantiumBlock:          big.NewInt(0),
+			ConstantinopleBlock:     big.NewInt(0),
+			PetersburgBlock:         big.NewInt(0),
+			IstanbulBlock:           big.NewInt(0),
+			MuirGlacierBlock:        big.NewInt(0),
+			BerlinBlock:             big.NewInt(0),
+			LondonBlock:             big.NewInt(0),
+			ArrowGlacierBlock:       nil,
+			GrayGlacierBlock:        nil,
+			TerminalTotalDifficulty: big.NewInt(0),
+			MergeNetsplitBlock:      big.NewInt(0),
+			ShanghaiTime:            newUint64(0),
+			CancunTime:              newUint64(0),
+			PragueTime:              newUint64(1742999832),
+			DepositContractAddress:  common.HexToAddress("0x00000000219ab540356cBB839Cbe05303d7705Fa"),
+			Ethash:                  new(params.EthashConfig),
+			BlobScheduleConfig: &params.BlobScheduleConfig{
+				Cancun: params.DefaultCancunBlobConfig,
+				Prague: params.DefaultPragueBlobConfig,
+			},
+		}
+	)
+	gspec := core.DefaultHoodiGenesisBlock()
+	gspec.Config = config
+
+	var testSuite = []struct {
+		time uint64
+		file string
+	}{
+		{
+			time: 0,
+			file: "next-and-last",
+		},
+		{
+			time: *gspec.Config.PragueTime,
+			file: "current",
+		},
+	}
+
+	for i, tt := range testSuite {
+		backend := configTimeBackend{nil, gspec, tt.time}
+		api := NewBlockChainAPI(backend)
+		result, err := api.Config(context.Background())
+		if err != nil {
+			t.Errorf("test %d: want no error, have %v", i, err)
+			continue
+		}
+		testRPCResponseWithFile(t, i, result, "eth_config", tt.file)
+	}
+}
+
+type configTimeBackend struct {
+	*testBackend
+	genesis *core.Genesis
+	time    uint64
+}
+
+func (b configTimeBackend) ChainConfig() *params.ChainConfig {
+	return b.genesis.Config
+}
+
+func (b configTimeBackend) HeaderByNumber(_ context.Context, n rpc.BlockNumber) (*types.Header, error) {
+	if n == 0 {
+		return b.genesis.ToBlock().Header(), nil
+	}
+	panic("not implemented")
+}
+
+func (b configTimeBackend) CurrentHeader() *types.Header {
+	return &types.Header{Time: b.time}
 }
