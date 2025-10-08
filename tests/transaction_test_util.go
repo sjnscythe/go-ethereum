@@ -17,7 +17,6 @@
 package tests
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 
@@ -44,7 +43,7 @@ type ttFork struct {
 
 func (tt *TransactionTest) validate() error {
 	if tt.Txbytes == nil {
-		return errors.New("missing txbytes")
+		return fmt.Errorf("missing txbytes")
 	}
 	for name, fork := range tt.Result {
 		if err := tt.validateFork(fork); err != nil {
@@ -59,10 +58,10 @@ func (tt *TransactionTest) validateFork(fork *ttFork) error {
 		return nil
 	}
 	if fork.Hash == nil && fork.Exception == nil {
-		return errors.New("missing hash and exception")
+		return fmt.Errorf("missing hash and exception")
 	}
 	if fork.Hash != nil && fork.Sender == nil {
-		return errors.New("missing sender")
+		return fmt.Errorf("missing sender")
 	}
 	return nil
 }

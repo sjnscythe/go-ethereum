@@ -527,8 +527,11 @@ func (args *TransactionArgs) ToTransaction(defaultType int) *types.Transaction {
 			BlobFeeCap: uint256.MustFromBig((*big.Int)(args.BlobFeeCap)),
 		}
 		if args.Blobs != nil {
-			// TODO(rjl493456442, marius) support V1
-			data.(*types.BlobTx).Sidecar = types.NewBlobTxSidecar(types.BlobSidecarVersion0, args.Blobs, args.Commitments, args.Proofs)
+			data.(*types.BlobTx).Sidecar = &types.BlobTxSidecar{
+				Blobs:       args.Blobs,
+				Commitments: args.Commitments,
+				Proofs:      args.Proofs,
+			}
 		}
 
 	case types.DynamicFeeTxType:

@@ -106,8 +106,6 @@ func NewEVMInterpreter(evm *EVM) *EVMInterpreter {
 	// If jump table was not initialised we set the default one.
 	var table *JumpTable
 	switch {
-	case evm.chainRules.IsOsaka:
-		table = &osakaInstructionSet
 	case evm.chainRules.IsVerkle:
 		// TODO replace with proper instruction set when fork is specified
 		table = &verkleInstructionSet
@@ -183,11 +181,10 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	}
 
 	var (
-		op          OpCode     // current opcode
-		jumpTable   *JumpTable = in.table
-		mem                    = NewMemory() // bound memory
-		stack                  = newstack()  // local stack
-		callContext            = &ScopeContext{
+		op          OpCode        // current opcode
+		mem         = NewMemory() // bound memory
+		stack       = newstack()  // local stack
+		callContext = &ScopeContext{
 			Memory:   mem,
 			Stack:    stack,
 			Contract: contract,
@@ -230,7 +227,6 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
 	// the execution of one of the operations or until the done flag is set by the
 	// parent context.
-	_ = jumpTable[0] // nil-check the jumpTable out of the loop
 	for {
 		if debug {
 			// Capture pre-execution values for tracing.
@@ -251,7 +247,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		// Get the operation from the jump table and validate the stack to ensure there are
 		// enough stack items available to perform the operation.
 		op = contract.GetOp(pc)
-		operation := jumpTable[op]
+		operation := in.table[op]
 		cost = operation.constantGas // For tracing
 		// Validate stack
 		if sLen := stack.len(); sLen < operation.minStack {

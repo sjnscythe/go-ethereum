@@ -55,13 +55,13 @@ var (
 		Usage:    "Per-module verbosity: comma-separated list of <pattern>=<level> (e.g. eth/*=5,p2p=4)",
 		Value:    "",
 		Hidden:   true,
-		Category: flags.DeprecatedCategory,
+		Category: flags.LoggingCategory,
 	}
 	logjsonFlag = &cli.BoolFlag{
 		Name:     "log.json",
 		Usage:    "Format logs with JSON",
 		Hidden:   true,
-		Category: flags.DeprecatedCategory,
+		Category: flags.LoggingCategory,
 	}
 	logFormatFlag = &cli.StringFlag{
 		Name:     "log.format",

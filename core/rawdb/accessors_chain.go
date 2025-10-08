@@ -143,13 +143,13 @@ func ReadAllCanonicalHashes(db ethdb.Iteratee, from uint64, to uint64, limit int
 }
 
 // ReadHeaderNumber returns the header number assigned to a hash.
-func ReadHeaderNumber(db ethdb.KeyValueReader, hash common.Hash) (uint64, bool) {
+func ReadHeaderNumber(db ethdb.KeyValueReader, hash common.Hash) *uint64 {
 	data, _ := db.Get(headerNumberKey(hash))
 	if len(data) != 8 {
-		return 0, false
+		return nil
 	}
 	number := binary.BigEndian.Uint64(data)
-	return number, true
+	return &number
 }
 
 // WriteHeaderNumber stores the hash->number mapping.
@@ -935,11 +935,11 @@ func ReadHeadHeader(db ethdb.Reader) *types.Header {
 	if headHeaderHash == (common.Hash{}) {
 		return nil
 	}
-	headHeaderNumber, ok := ReadHeaderNumber(db, headHeaderHash)
-	if !ok {
+	headHeaderNumber := ReadHeaderNumber(db, headHeaderHash)
+	if headHeaderNumber == nil {
 		return nil
 	}
-	return ReadHeader(db, headHeaderHash, headHeaderNumber)
+	return ReadHeader(db, headHeaderHash, *headHeaderNumber)
 }
 
 // ReadHeadBlock returns the current canonical head block.
@@ -948,9 +948,9 @@ func ReadHeadBlock(db ethdb.Reader) *types.Block {
 	if headBlockHash == (common.Hash{}) {
 		return nil
 	}
-	headBlockNumber, ok := ReadHeaderNumber(db, headBlockHash)
-	if !ok {
+	headBlockNumber := ReadHeaderNumber(db, headBlockHash)
+	if headBlockNumber == nil {
 		return nil
 	}
-	return ReadBlock(db, headBlockHash, headBlockNumber)
+	return ReadBlock(db, headBlockHash, *headBlockNumber)
 }

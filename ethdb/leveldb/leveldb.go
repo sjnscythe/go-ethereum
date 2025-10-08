@@ -22,7 +22,6 @@ package leveldb
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,7 +31,7 @@ import (
 	"github.com/onflow/go-ethereum/log"
 	"github.com/onflow/go-ethereum/metrics"
 	"github.com/syndtr/goleveldb/leveldb"
-	lerrors "github.com/syndtr/goleveldb/leveldb/errors"
+	"github.com/syndtr/goleveldb/leveldb/errors"
 	"github.com/syndtr/goleveldb/leveldb/filter"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/syndtr/goleveldb/leveldb/util"
@@ -121,7 +120,7 @@ func NewCustom(file string, namespace string, customize func(options *opt.Option
 
 	// Open the db and recover any potential corruptions
 	db, err := leveldb.OpenFile(file, options)
-	if _, corrupted := err.(*lerrors.ErrCorrupted); corrupted {
+	if _, corrupted := err.(*errors.ErrCorrupted); corrupted {
 		db, err = leveldb.RecoverFile(file, nil)
 	}
 	if err != nil {
@@ -549,7 +548,7 @@ func (r *replayer) DeleteRange(start, end []byte) {
 	if rangeDeleter, ok := r.writer.(ethdb.KeyValueRangeDeleter); ok {
 		r.failure = rangeDeleter.DeleteRange(start, end)
 	} else {
-		r.failure = errors.New("ethdb.KeyValueWriter does not implement DeleteRange")
+		r.failure = fmt.Errorf("ethdb.KeyValueWriter does not implement DeleteRange")
 	}
 }
 

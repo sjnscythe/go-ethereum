@@ -626,7 +626,7 @@ func (t *Trie) resolveAndTrack(n hashNode, prefix []byte) (node, error) {
 // Hash returns the root hash of the trie. It does not write to the
 // database and can be used even if the trie doesn't have one.
 func (t *Trie) Hash() common.Hash {
-	return common.BytesToHash(t.hashRoot())
+	return common.BytesToHash(t.hashRoot().(hashNode))
 }
 
 // Commit collects all dirty nodes in the trie and replaces them with the
@@ -677,9 +677,9 @@ func (t *Trie) Commit(collectLeaf bool) (common.Hash, *trienode.NodeSet) {
 }
 
 // hashRoot calculates the root hash of the given trie
-func (t *Trie) hashRoot() []byte {
+func (t *Trie) hashRoot() node {
 	if t.root == nil {
-		return types.EmptyRootHash.Bytes()
+		return hashNode(types.EmptyRootHash.Bytes())
 	}
 	// If the number of changes is below 100, we let one thread handle it
 	h := newHasher(t.unhashed >= 100)

@@ -33,6 +33,7 @@ import (
 	"github.com/onflow/go-ethereum/core/txpool"
 	"github.com/onflow/go-ethereum/core/types"
 	"github.com/onflow/go-ethereum/core/vm"
+	"github.com/onflow/go-ethereum/crypto/kzg4844"
 	"github.com/onflow/go-ethereum/log"
 	"github.com/onflow/go-ethereum/params"
 )
@@ -49,7 +50,6 @@ type environment struct {
 	signer   types.Signer
 	state    *state.StateDB // apply state changes here
 	tcount   int            // tx count in cycle
-	size     uint64         // size of the block we are building
 	gasPool  *core.GasPool  // available gas used to pack transactions
 	coinbase common.Address
 	evm      *vm.EVM
@@ -63,22 +63,12 @@ type environment struct {
 	witness *stateless.Witness
 }
 
-// txFits reports whether the transaction fits into the block size limit.
-func (env *environment) txFitsSize(tx *types.Transaction) bool {
-	return env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone
-}
-
 const (
 	commitInterruptNone int32 = iota
 	commitInterruptNewHead
 	commitInterruptResubmit
 	commitInterruptTimeout
 )
-
-// Block size is capped by the protocol at params.MaxBlockSize. When producing blocks, we
-// try to say below the size including a buffer zone, this is to avoid going over the
-// maximum size with auxiliary data added into the block.
-const maxBlockSizeBufferZone = 1_000_000
 
 // newPayloadResult is the result of payload generation.
 type newPayloadResult struct {
@@ -105,23 +95,12 @@ type generateParams struct {
 }
 
 // generateWork generates a sealing block based on the given parameters.
-func (miner *Miner) generateWork(genParam *generateParams, witness bool) *newPayloadResult {
-	work, err := miner.prepareWork(genParam, witness)
+func (miner *Miner) generateWork(params *generateParams, witness bool) *newPayloadResult {
+	work, err := miner.prepareWork(params, witness)
 	if err != nil {
 		return &newPayloadResult{err: err}
 	}
-
-	// Check withdrawals fit max block size.
-	// Due to the cap on withdrawal count, this can actually never happen, but we still need to
-	// check to ensure the CL notices there's a problem if the withdrawal cap is ever lifted.
-	maxBlockSize := params.MaxBlockSize - maxBlockSizeBufferZone
-	if genParam.withdrawals.Size() > maxBlockSize {
-		return &newPayloadResult{err: errors.New("withdrawals exceed max block size")}
-	}
-	// Also add size of withdrawals to work block size.
-	work.size += uint64(genParam.withdrawals.Size())
-
-	if !genParam.noTxs {
+	if !params.noTxs {
 		interrupt := new(atomic.Int32)
 		timer := time.AfterFunc(miner.config.Recommit, func() {
 			interrupt.Store(commitInterruptTimeout)
@@ -133,8 +112,8 @@ func (miner *Miner) generateWork(genParam *generateParams, witness bool) *newPay
 			log.Warn("Block building is interrupted", "allowance", common.PrettyDuration(miner.config.Recommit))
 		}
 	}
-	body := types.Body{Transactions: work.txs, Withdrawals: genParam.withdrawals}
 
+	body := types.Body{Transactions: work.txs, Withdrawals: params.withdrawals}
 	allLogs := make([]*types.Log, 0)
 	for _, r := range work.receipts {
 		allLogs = append(allLogs, r.Logs...)
@@ -277,7 +256,6 @@ func (miner *Miner) makeEnv(parent *types.Header, header *types.Header, coinbase
 	return &environment{
 		signer:   types.MakeSigner(miner.chainConfig, header.Number, header.Time),
 		state:    state,
-		size:     uint64(header.Size()),
 		coinbase: coinbase,
 		header:   header,
 		witness:  state.Witness(),
@@ -295,7 +273,6 @@ func (miner *Miner) commitTransaction(env *environment, tx *types.Transaction) e
 	}
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
-	env.size += tx.Size()
 	env.tcount++
 	return nil
 }
@@ -317,12 +294,10 @@ func (miner *Miner) commitBlobTransaction(env *environment, tx *types.Transactio
 	if err != nil {
 		return err
 	}
-	txNoBlob := tx.WithoutBlobTxSidecar()
-	env.txs = append(env.txs, txNoBlob)
+	env.txs = append(env.txs, tx.WithoutBlobTxSidecar())
 	env.receipts = append(env.receipts, receipt)
 	env.sidecars = append(env.sidecars, sc)
 	env.blobs += len(sc.Blobs)
-	env.size += txNoBlob.Size()
 	*env.header.BlobGasUsed += receipt.BlobGasUsed
 	env.tcount++
 	return nil
@@ -343,11 +318,7 @@ func (miner *Miner) applyTransaction(env *environment, tx *types.Transaction) (*
 }
 
 func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *transactionsByPriceAndNonce, interrupt *atomic.Int32) error {
-	var (
-		isOsaka  = miner.chainConfig.IsOsaka(env.header.Number, env.header.Time)
-		isCancun = miner.chainConfig.IsCancun(env.header.Number, env.header.Time)
-		gasLimit = env.header.GasLimit
-	)
+	gasLimit := env.header.GasLimit
 	if env.gasPool == nil {
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
@@ -403,7 +374,7 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 		// Most of the blob gas logic here is agnostic as to if the chain supports
 		// blobs or not, however the max check panics when called on a chain without
 		// a defined schedule, so we need to verify it's safe to call.
-		if isCancun {
+		if miner.chainConfig.IsCancun(env.header.Number, env.header.Time) {
 			left := eip4844.MaxBlobsPerBlock(miner.chainConfig, env.header.Time) - env.blobs
 			if left < int(ltx.BlobGas/params.BlobTxBlobGasPerBlob) {
 				log.Trace("Not enough blob space left for transaction", "hash", ltx.Hash, "left", left, "needed", ltx.BlobGas/params.BlobTxBlobGasPerBlob)
@@ -420,21 +391,18 @@ func (miner *Miner) commitTransactions(env *environment, plainTxs, blobTxs *tran
 			continue
 		}
 
-		// if inclusion of the transaction would put the block size over the
-		// maximum we allow, don't add any more txs to the payload.
-		if !env.txFitsSize(tx) {
-			break
-		}
-
 		// Make sure all transactions after osaka have cell proofs
-		if isOsaka {
+		if miner.chainConfig.IsOsaka(env.header.Number, env.header.Time) {
 			if sidecar := tx.BlobTxSidecar(); sidecar != nil {
-				if sidecar.Version == types.BlobSidecarVersion0 {
+				if sidecar.Version == 0 {
 					log.Info("Including blob tx with v0 sidecar, recomputing proofs", "hash", ltx.Hash)
-					if err := sidecar.ToV1(); err != nil {
-						txs.Pop()
-						log.Warn("Failed to recompute cell proofs", "hash", ltx.Hash, "err", err)
-						continue
+					sidecar.Proofs = make([]kzg4844.Proof, 0, len(sidecar.Blobs)*kzg4844.CellProofsPerBlob)
+					for _, blob := range sidecar.Blobs {
+						cellProofs, err := kzg4844.ComputeCellProofs(&blob)
+						if err != nil {
+							panic(err)
+						}
+						sidecar.Proofs = append(sidecar.Proofs, cellProofs...)
 					}
 				}
 			}
@@ -493,9 +461,6 @@ func (miner *Miner) fillTransactions(interrupt *atomic.Int32, env *environment) 
 	}
 	if env.header.ExcessBlobGas != nil {
 		filter.BlobFee = uint256.MustFromBig(eip4844.CalcBlobFee(miner.chainConfig, env.header))
-	}
-	if miner.chainConfig.IsOsaka(env.header.Number, env.header.Time) {
-		filter.GasLimitCap = params.MaxTxGas
 	}
 	filter.OnlyPlainTxs, filter.OnlyBlobTxs = true, false
 	pendingPlainTxs := miner.txpool.Pending(filter)

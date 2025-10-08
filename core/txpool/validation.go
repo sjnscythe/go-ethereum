@@ -90,9 +90,6 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	if rules.IsShanghai && tx.To() == nil && len(tx.Data()) > params.MaxInitCodeSize {
 		return fmt.Errorf("%w: code size %v, limit %v", core.ErrMaxInitCodeSizeExceeded, len(tx.Data()), params.MaxInitCodeSize)
 	}
-	if rules.IsOsaka && tx.Gas() > params.MaxTxGas {
-		return fmt.Errorf("%w (cap: %d, tx: %d)", core.ErrGasLimitTooHigh, params.MaxTxGas, tx.Gas())
-	}
 	// Transactions can't be negative. This may never happen using RLP decoded
 	// transactions but may occur for transactions created using the RPC.
 	if tx.Value().Sign() < 0 {
@@ -145,7 +142,7 @@ func ValidateTransaction(tx *types.Transaction, head *types.Header, signer types
 	}
 	if tx.Type() == types.SetCodeTxType {
 		if len(tx.SetCodeAuthorizations()) == 0 {
-			return errors.New("set code tx must have at least one authorization tuple")
+			return fmt.Errorf("set code tx must have at least one authorization tuple")
 		}
 	}
 	return nil
@@ -185,7 +182,7 @@ func validateBlobTx(tx *types.Transaction, head *types.Header, opts *ValidationO
 }
 
 func validateBlobSidecarLegacy(sidecar *types.BlobTxSidecar, hashes []common.Hash) error {
-	if sidecar.Version != types.BlobSidecarVersion0 {
+	if sidecar.Version != 0 {
 		return fmt.Errorf("invalid sidecar version pre-osaka: %v", sidecar.Version)
 	}
 	if len(sidecar.Proofs) != len(hashes) {
@@ -200,7 +197,7 @@ func validateBlobSidecarLegacy(sidecar *types.BlobTxSidecar, hashes []common.Has
 }
 
 func validateBlobSidecarOsaka(sidecar *types.BlobTxSidecar, hashes []common.Hash) error {
-	if sidecar.Version != types.BlobSidecarVersion1 {
+	if sidecar.Version != 1 {
 		return fmt.Errorf("invalid sidecar version post-osaka: %v", sidecar.Version)
 	}
 	if len(sidecar.Proofs) != len(hashes)*kzg4844.CellProofsPerBlob {

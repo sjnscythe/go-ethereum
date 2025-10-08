@@ -89,7 +89,7 @@ type authorizationMarshaling struct {
 
 // SignSetCode creates a signed the SetCode authorization.
 func SignSetCode(prv *ecdsa.PrivateKey, auth SetCodeAuthorization) (SetCodeAuthorization, error) {
-	sighash := auth.SigHash()
+	sighash := auth.sigHash()
 	sig, err := crypto.Sign(sighash[:], prv)
 	if err != nil {
 		return SetCodeAuthorization{}, err
@@ -105,8 +105,7 @@ func SignSetCode(prv *ecdsa.PrivateKey, auth SetCodeAuthorization) (SetCodeAutho
 	}, nil
 }
 
-// SigHash returns the hash of SetCodeAuthorization for signing.
-func (a *SetCodeAuthorization) SigHash() common.Hash {
+func (a *SetCodeAuthorization) sigHash() common.Hash {
 	return prefixedRlpHash(0x05, []any{
 		a.ChainID,
 		a.Address,
@@ -116,7 +115,7 @@ func (a *SetCodeAuthorization) SigHash() common.Hash {
 
 // Authority recovers the the authorizing account of an authorization.
 func (a *SetCodeAuthorization) Authority() (common.Address, error) {
-	sighash := a.SigHash()
+	sighash := a.sigHash()
 	if !crypto.ValidateSignatureValues(a.V, a.R.ToBig(), a.S.ToBig(), true) {
 		return common.Address{}, ErrInvalidSig
 	}

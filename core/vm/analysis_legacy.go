@@ -25,16 +25,16 @@ const (
 	set7BitsMask = uint16(0b111_1111)
 )
 
-// BitVec is a bit vector which maps bytes in a program.
+// bitvec is a bit vector which maps bytes in a program.
 // An unset bit means the byte is an opcode, a set bit means
 // it's data (i.e. argument of PUSHxx).
-type BitVec []byte
+type bitvec []byte
 
-func (bits BitVec) set1(pos uint64) {
+func (bits bitvec) set1(pos uint64) {
 	bits[pos/8] |= 1 << (pos % 8)
 }
 
-func (bits BitVec) setN(flag uint16, pos uint64) {
+func (bits bitvec) setN(flag uint16, pos uint64) {
 	a := flag << (pos % 8)
 	bits[pos/8] |= byte(a)
 	if b := byte(a >> 8); b != 0 {
@@ -42,13 +42,13 @@ func (bits BitVec) setN(flag uint16, pos uint64) {
 	}
 }
 
-func (bits BitVec) set8(pos uint64) {
+func (bits bitvec) set8(pos uint64) {
 	a := byte(0xFF << (pos % 8))
 	bits[pos/8] |= a
 	bits[pos/8+1] = ^a
 }
 
-func (bits BitVec) set16(pos uint64) {
+func (bits bitvec) set16(pos uint64) {
 	a := byte(0xFF << (pos % 8))
 	bits[pos/8] |= a
 	bits[pos/8+1] = 0xFF
@@ -56,23 +56,23 @@ func (bits BitVec) set16(pos uint64) {
 }
 
 // codeSegment checks if the position is in a code segment.
-func (bits *BitVec) codeSegment(pos uint64) bool {
+func (bits *bitvec) codeSegment(pos uint64) bool {
 	return (((*bits)[pos/8] >> (pos % 8)) & 1) == 0
 }
 
 // codeBitmap collects data locations in code.
-func codeBitmap(code []byte) BitVec {
+func codeBitmap(code []byte) bitvec {
 	// The bitmap is 4 bytes longer than necessary, in case the code
 	// ends with a PUSH32, the algorithm will set bits on the
 	// bitvector outside the bounds of the actual code.
-	bits := make(BitVec, len(code)/8+1+4)
+	bits := make(bitvec, len(code)/8+1+4)
 	return codeBitmapInternal(code, bits)
 }
 
 // codeBitmapInternal is the internal implementation of codeBitmap.
 // It exists for the purpose of being able to run benchmark tests
 // without dynamic allocations affecting the results.
-func codeBitmapInternal(code, bits BitVec) BitVec {
+func codeBitmapInternal(code, bits bitvec) bitvec {
 	for pc := uint64(0); pc < uint64(len(code)); {
 		op := OpCode(code[pc])
 		pc++

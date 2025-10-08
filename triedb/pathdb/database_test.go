@@ -21,9 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"os"
-	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/holiman/uint256"
@@ -31,7 +28,6 @@ import (
 	"github.com/onflow/go-ethereum/core/rawdb"
 	"github.com/onflow/go-ethereum/core/types"
 	"github.com/onflow/go-ethereum/crypto"
-	"github.com/onflow/go-ethereum/ethdb"
 	"github.com/onflow/go-ethereum/internal/testrand"
 	"github.com/onflow/go-ethereum/rlp"
 	"github.com/onflow/go-ethereum/trie"
@@ -125,7 +121,7 @@ type tester struct {
 	snapStorages map[common.Hash]map[common.Hash]map[common.Hash][]byte // Keyed by the hash of account address and the hash of storage key
 }
 
-func newTester(t *testing.T, historyLimit uint64, isVerkle bool, layers int, enableIndex bool, journalDir string) *tester {
+func newTester(t *testing.T, historyLimit uint64, isVerkle bool, layers int, enableIndex bool) *tester {
 	var (
 		disk, _ = rawdb.Open(rawdb.NewMemoryDatabase(), rawdb.OpenOptions{Ancient: t.TempDir()})
 		db      = New(disk, &Config{
@@ -135,7 +131,6 @@ func newTester(t *testing.T, historyLimit uint64, isVerkle bool, layers int, ena
 			StateCleanSize:      256 * 1024,
 			WriteBufferSize:     256 * 1024,
 			NoAsyncFlush:        true,
-			JournalDirectory:    journalDir,
 		}, isVerkle)
 
 		obj = &tester{
@@ -471,7 +466,7 @@ func TestDatabaseRollback(t *testing.T) {
 	}()
 
 	// Verify state histories
-	tester := newTester(t, 0, false, 32, false, "")
+	tester := newTester(t, 0, false, 32, false)
 	defer tester.release()
 
 	if err := tester.verifyHistory(); err != nil {
@@ -505,7 +500,7 @@ func TestDatabaseRecoverable(t *testing.T) {
 	}()
 
 	var (
-		tester = newTester(t, 0, false, 12, false, "")
+		tester = newTester(t, 0, false, 12, false)
 		index  = tester.bottomIndex()
 	)
 	defer tester.release()
@@ -549,7 +544,7 @@ func TestDisable(t *testing.T) {
 		maxDiffLayers = 128
 	}()
 
-	tester := newTester(t, 0, false, 32, false, "")
+	tester := newTester(t, 0, false, 32, false)
 	defer tester.release()
 
 	stored := crypto.Keccak256Hash(rawdb.ReadAccountTrieNode(tester.db.diskdb, nil))
@@ -591,7 +586,7 @@ func TestCommit(t *testing.T) {
 		maxDiffLayers = 128
 	}()
 
-	tester := newTester(t, 0, false, 12, false, "")
+	tester := newTester(t, 0, false, 12, false)
 	defer tester.release()
 
 	if err := tester.db.Commit(tester.lastHash(), false); err != nil {
@@ -615,25 +610,20 @@ func TestCommit(t *testing.T) {
 }
 
 func TestJournal(t *testing.T) {
-	testJournal(t, "")
-	testJournal(t, filepath.Join(t.TempDir(), strconv.Itoa(rand.Intn(10000))))
-}
-
-func testJournal(t *testing.T, journalDir string) {
 	// Redefine the diff layer depth allowance for faster testing.
 	maxDiffLayers = 4
 	defer func() {
 		maxDiffLayers = 128
 	}()
 
-	tester := newTester(t, 0, false, 12, false, journalDir)
+	tester := newTester(t, 0, false, 12, false)
 	defer tester.release()
 
 	if err := tester.db.Journal(tester.lastHash()); err != nil {
 		t.Errorf("Failed to journal, err: %v", err)
 	}
 	tester.db.Close()
-	tester.db = New(tester.db.diskdb, tester.db.config, false)
+	tester.db = New(tester.db.diskdb, nil, false)
 
 	// Verify states including disk layer and all diff on top.
 	for i := 0; i < len(tester.roots); i++ {
@@ -650,30 +640,13 @@ func testJournal(t *testing.T, journalDir string) {
 }
 
 func TestCorruptedJournal(t *testing.T) {
-	testCorruptedJournal(t, "", func(db ethdb.Database) {
-		// Mutate the journal in disk, it should be regarded as invalid
-		blob := rawdb.ReadTrieJournal(db)
-		blob[0] = 0xa
-		rawdb.WriteTrieJournal(db, blob)
-	})
-
-	directory := filepath.Join(t.TempDir(), strconv.Itoa(rand.Intn(10000)))
-	testCorruptedJournal(t, directory, func(_ ethdb.Database) {
-		f, _ := os.OpenFile(filepath.Join(directory, "merkle.journal"), os.O_WRONLY, 0644)
-		f.WriteAt([]byte{0xa}, 0)
-		f.Sync()
-		f.Close()
-	})
-}
-
-func testCorruptedJournal(t *testing.T, journalDir string, modifyFn func(database ethdb.Database)) {
 	// Redefine the diff layer depth allowance for faster testing.
 	maxDiffLayers = 4
 	defer func() {
 		maxDiffLayers = 128
 	}()
 
-	tester := newTester(t, 0, false, 12, false, journalDir)
+	tester := newTester(t, 0, false, 12, false)
 	defer tester.release()
 
 	if err := tester.db.Journal(tester.lastHash()); err != nil {
@@ -682,10 +655,13 @@ func testCorruptedJournal(t *testing.T, journalDir string, modifyFn func(databas
 	tester.db.Close()
 	root := crypto.Keccak256Hash(rawdb.ReadAccountTrieNode(tester.db.diskdb, nil))
 
-	modifyFn(tester.db.diskdb)
+	// Mutate the journal in disk, it should be regarded as invalid
+	blob := rawdb.ReadTrieJournal(tester.db.diskdb)
+	blob[0] = 0xa
+	rawdb.WriteTrieJournal(tester.db.diskdb, blob)
 
 	// Verify states, all not-yet-written states should be discarded
-	tester.db = New(tester.db.diskdb, tester.db.config, false)
+	tester.db = New(tester.db.diskdb, nil, false)
 	for i := 0; i < len(tester.roots); i++ {
 		if tester.roots[i] == root {
 			if err := tester.verifyState(root); err != nil {
@@ -718,7 +694,7 @@ func TestTailTruncateHistory(t *testing.T) {
 		maxDiffLayers = 128
 	}()
 
-	tester := newTester(t, 10, false, 12, false, "")
+	tester := newTester(t, 10, false, 12, false)
 	defer tester.release()
 
 	tester.db.Close()

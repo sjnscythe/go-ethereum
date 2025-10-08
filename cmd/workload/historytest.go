@@ -20,7 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"github.com/onflow/go-ethereum/common"
 	"github.com/onflow/go-ethereum/common/hexutil"
@@ -53,14 +52,7 @@ func newHistoryTestSuite(cfg testConfig) *historyTestSuite {
 func (s *historyTestSuite) loadTests() error {
 	file, err := s.cfg.fsys.Open(s.cfg.historyTestFile)
 	if err != nil {
-		// If not found in embedded FS, try to load it from disk
-		if !os.IsNotExist(err) {
-			return err
-		}
-		file, err = os.OpenFile(s.cfg.historyTestFile, os.O_RDONLY, 0666)
-		if err != nil {
-			return fmt.Errorf("can't open historyTestFile: %v", err)
-		}
+		return fmt.Errorf("can't open historyTestFile: %v", err)
 	}
 	defer file.Close()
 	if err := json.NewDecoder(file).Decode(&s.tests); err != nil {

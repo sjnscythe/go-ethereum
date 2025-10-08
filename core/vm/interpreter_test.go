@@ -18,7 +18,6 @@ package vm
 
 import (
 	"math"
-	"math/big"
 	"testing"
 	"time"
 
@@ -73,24 +72,5 @@ func TestLoopInterrupt(t *testing.T) {
 				t.Errorf("test %d failure: %v", i, err)
 			}
 		}
-	}
-}
-
-func BenchmarkInterpreter(b *testing.B) {
-	var (
-		statedb, _        = state.New(types.EmptyRootHash, state.NewDatabaseForTesting())
-		evm               = NewEVM(BlockContext{BlockNumber: big.NewInt(1), Time: 1, Random: &common.Hash{}}, statedb, params.MergedTestChainConfig, Config{})
-		startGas   uint64 = 100_000_000
-		value             = uint256.NewInt(0)
-		stack             = newstack()
-		mem               = NewMemory()
-		contract          = NewContract(common.Address{}, common.Address{}, value, startGas, nil)
-	)
-	stack.push(uint256.NewInt(123))
-	stack.push(uint256.NewInt(123))
-	gasSStoreEIP3529 = makeGasSStoreFunc(params.SstoreClearsScheduleRefundEIP3529)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		gasSStoreEIP3529(evm, contract, stack, mem, 1234)
 	}
 }

@@ -22,7 +22,6 @@ import (
 	"fmt"
 
 	"github.com/onflow/go-ethereum/common"
-	"github.com/onflow/go-ethereum/crypto"
 	"github.com/onflow/go-ethereum/ethdb"
 	"github.com/onflow/go-ethereum/log"
 )
@@ -86,9 +85,16 @@ func (t *Trie) Prove(key []byte, proofDb ethdb.KeyValueWriter) error {
 	defer returnHasherToPool(hasher)
 
 	for i, n := range nodes {
-		enc := hasher.proofHash(n)
-		if len(enc) >= 32 || i == 0 {
-			proofDb.Put(crypto.Keccak256(enc), enc)
+		var hn node
+		n, hn = hasher.proofHash(n)
+		if hash, ok := hn.(hashNode); ok || i == 0 {
+			// If the node's database encoding is a hash (or is the
+			// root node), it becomes a proof element.
+			enc := nodeToBytes(n)
+			if !ok {
+				hash = hasher.hashData(enc)
+			}
+			proofDb.Put(hash, enc)
 		}
 	}
 	return nil

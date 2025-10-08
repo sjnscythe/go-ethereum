@@ -1,20 +1,18 @@
+name: i386 linux tests
+
 on:
   push:
-    branches:
-      - master
+    branches: [ master ]
   pull_request:
-    branches:
-      - master
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
   lint:
     name: Lint
-    runs-on: self-hosted-ghr
+    runs-on: self-hosted
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: false
 
     # Cache build tools to avoid downloading them each time
     - uses: actions/cache@v4
@@ -25,7 +23,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: 1.24
+        go-version: 1.23.0
         cache: false
 
     - name: Run linters
@@ -34,25 +32,17 @@ jobs:
         go run build/ci.go check_generate
         go run build/ci.go check_baddeps
 
-  test:
-    name: Test
-    needs: lint
-    runs-on: self-hosted-ghr
-    strategy:
-      matrix:
-        go:
-          - '1.24'
-          - '1.23'
+  build:
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go }}
+          go-version: 1.24.0
           cache: false
-
       - name: Run tests
-        run: go test ./...
+        run: go test -short ./...
+        env:
+          GOOS: linux
+          GOARCH: 386

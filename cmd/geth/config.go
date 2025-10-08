@@ -262,16 +262,14 @@ func makeFullNode(ctx *cli.Context) *node.Node {
 	if cfg.Ethstats.URL != "" {
 		utils.RegisterEthStatsService(stack, backend, cfg.Ethstats.URL)
 	}
-	// Configure synchronization override service
-	var synctarget common.Hash
+	// Configure full-sync tester service if requested
 	if ctx.IsSet(utils.SyncTargetFlag.Name) {
 		hex := hexutil.MustDecode(ctx.String(utils.SyncTargetFlag.Name))
 		if len(hex) != common.HashLength {
 			utils.Fatalf("invalid sync target length: have %d, want %d", len(hex), common.HashLength)
 		}
-		synctarget = common.BytesToHash(hex)
+		utils.RegisterFullSyncTester(stack, eth, common.BytesToHash(hex))
 	}
-	utils.RegisterSyncOverrideService(stack, eth, synctarget, ctx.Bool(utils.ExitWhenSyncedFlag.Name))
 
 	if ctx.IsSet(utils.DeveloperFlag.Name) {
 		// Start dev mode.

@@ -439,8 +439,8 @@ func (f *TxFetcher) loop() {
 			if want > maxTxAnnounces {
 				txAnnounceDOSMeter.Mark(int64(want - maxTxAnnounces))
 
-				ann.hashes = ann.hashes[:maxTxAnnounces-used]
-				ann.metas = ann.metas[:maxTxAnnounces-used]
+				ann.hashes = ann.hashes[:want-maxTxAnnounces]
+				ann.metas = ann.metas[:want-maxTxAnnounces]
 			}
 			// All is well, schedule the remainder of the transactions
 			var (

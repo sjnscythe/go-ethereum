@@ -70,12 +70,7 @@ func (a *simulatedBeaconAPI) loop() {
 				if executable, _ := a.sim.eth.TxPool().Stats(); executable == 0 {
 					break
 				}
-				select {
-				case <-a.sim.shutdownCh:
-					return
-				default:
-					a.sim.Commit()
-				}
+				a.sim.Commit()
 			}
 		}
 	}()

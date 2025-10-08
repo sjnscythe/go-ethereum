@@ -98,7 +98,7 @@ Subscriptions are deleted when the user sends an unsubscribe request or when the
 connection which was used to create the subscription is closed. This can be initiated by
 the client and server. The server will close the connection for any write error.
 
-For more information about subscriptions, see https://geth.ethereum.org/docs/interacting-with-geth/rpc/pubsub
+For more information about subscriptions, see https://github.com/onflow/go-ethereum/wiki/RPC-PUB-SUB.
 
 # Reverse Calls
 

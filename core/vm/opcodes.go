@@ -62,7 +62,6 @@ const (
 	SHL    OpCode = 0x1b
 	SHR    OpCode = 0x1c
 	SAR    OpCode = 0x1d
-	CLZ    OpCode = 0x1e
 )
 
 // 0x20 range - crypto.
@@ -283,7 +282,6 @@ var opCodeToString = [256]string{
 	SHL:    "SHL",
 	SHR:    "SHR",
 	SAR:    "SAR",
-	CLZ:    "CLZ",
 	ADDMOD: "ADDMOD",
 	MULMOD: "MULMOD",
 
@@ -486,7 +484,6 @@ var stringToOp = map[string]OpCode{
 	"SHL":             SHL,
 	"SHR":             SHR,
 	"SAR":             SAR,
-	"CLZ":             CLZ,
 	"ADDMOD":          ADDMOD,
 	"MULMOD":          MULMOD,
 	"KECCAK256":       KECCAK256,
